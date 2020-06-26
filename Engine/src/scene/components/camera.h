@@ -33,6 +33,9 @@ public:
     // Orthographic Camera Properties
     DoubleProperty Width;
 
+    // Skybox
+    ResourceProperty<Cubemap> Skybox;
+
     PropertyGroup TraceSettings;
     PropertyGroup TraceDebugger;
 

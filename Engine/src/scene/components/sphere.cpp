@@ -9,6 +9,7 @@
  ****************************************************************************/
 #include "sphere.h"
 #include <animator.h>
+#include <math.h>
 
 REGISTER_COMPONENT(Sphere, Geometry)
 
@@ -29,16 +30,49 @@ Sphere::Sphere()
 
 bool Sphere::IntersectLocal(const Ray &r, Intersection &i)
 {
-    // REQUIREMENT: Sphere intersection code here.
-    // Sphere is a unit sphere (radius = 0.5) centered at the origin.
-    // Currently ignores all spheres and just returns false.
-    // Hint: Use double-precision (not float) for the intersection test
+    // Sphere intersection code.
+    glm::dvec3 e = r.position;
+    glm::dvec3 d = r.direction;
+
+    double radius = 0.5;
+    double a = glm::dot(d, d);
+    double b = 2.0 * glm::dot(d, e);
+    double c = glm::dot(e, e) - radius * radius;
+    double t;
+    double delta = b * b - 4.0 * a * c;
+    if (delta < 0.0) {
+        // no root
+        return false;
+    } else if (delta == 0.0) {
+        // one root
+        t = (- b + glm::sqrt(delta)) / (2.0 * a);
+        if (t < RAY_EPSILON) {
+            return false;
+        }
+    } else {
+        // two roots
+        double t1 = (- b - glm::sqrt(delta)) / (2.0 * a);
+        double t2 = (- b + glm::sqrt(delta)) / (2.0 * a);
+        if (t1 >= RAY_EPSILON) {
+            t = t1;
+        } else if (t2 >= RAY_EPSILON) {
+            t = t2;
+        } else {
+            return false;
+        }
+    }
+
     // If the ray r intersects this sphere:
     // 1. put the hit parameter in i.t
+    i.t = t;
     // 2. put the normal in i.normal
+    i.normal = glm::normalize(r.at(t));
     // 3. put the texture coordinates in i.uv
+    double u = 0.5 + atan2(i.normal.z, i.normal.x) / (2.0 * M_PI);
+    double v = 0.5 - asin(i.normal.y) / M_PI;
+    i.uv = glm::vec2(u, v);
     // and return true;
-    return false;
+    return true;
 }
 
 void Sphere::RegenerateMesh() {

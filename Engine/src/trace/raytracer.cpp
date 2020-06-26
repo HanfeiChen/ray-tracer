@@ -32,6 +32,7 @@ RayTracer::RayTracer(Scene& scene, SceneObject& camobj) :
     trace_scene(&scene, camobj.GetComponent<Camera>()->TraceEnableAcceleration.Get()), next_render_index(0), cancelling(false), first_pass_buffer(nullptr)
 {
     Camera* cam = camobj.GetComponent<Camera>();
+    settings.skybox = cam->Skybox.Get();
 
     settings.width = cam->RenderWidth.Get();
     settings.height = cam->RenderHeight.Get();
@@ -166,14 +167,71 @@ void RayTracer::ComputePixel(int i, int j, Camera* debug_camera) {
     // Trace the ray!
     glm::vec3 color(0,0,0);
 
-    switch (settings.samplecount_mode) {
+    switch (settings.random_mode)
+    {
+    case Camera::TRACERANDOM_DETERMINISTIC:
+        switch (settings.samplecount_mode) {
         case Camera::TRACESAMPLING_CONSTANT:
-            // REQUIREMENT: Implement Anti-aliasing
-            //              use setting.constant_samples_per_pixel to get the amount of samples of a pixel for anti-alasing
-            color = SampleCamera(x_corner, y_corner, settings.pixel_size_x, settings.pixel_size_y, debug_camera);
+            // Anti-aliasing
+            // use setting.constant_samples_per_pixel to get the amount of samples of a pixel for anti-alasing
+            {
+                unsigned int num_samples = settings.constant_samples_per_pixel;
+                int grid_size = (int) sqrt(num_samples);
+                double subpixel_size_x = settings.pixel_size_x / grid_size;
+                double subpixel_size_y = settings.pixel_size_y / grid_size;
+                for (int i = 0; i < grid_size; i++) {
+                    for (int j = 0; j < grid_size; j++) {
+                        double cell_x_corner = x_corner + j * subpixel_size_x;
+                        double cell_y_corner = y_corner + i * subpixel_size_y;
+                        color += SampleCamera(cell_x_corner, cell_y_corner, subpixel_size_x, subpixel_size_y, debug_camera, false);
+                    }
+                }
+                color /= num_samples;
+            }
             break;
         default:
             break;
+        }
+        break;
+    case Camera::TRACERANDOM_UNIFORM:
+        switch (settings.samplecount_mode) {
+        case Camera::TRACESAMPLING_CONSTANT:
+            {
+                unsigned int num_samples = settings.constant_samples_per_pixel;
+                for (int i = 0; i < (int) settings.constant_samples_per_pixel; i++) {
+                    color += SampleCamera(x_corner, y_corner, settings.pixel_size_x, settings.pixel_size_y, debug_camera, true);
+                }
+                color /= num_samples;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+    case Camera::TRACERANDOM_STRATIFIED:
+        switch (settings.samplecount_mode) {
+        case Camera::TRACESAMPLING_CONSTANT:
+            {
+                unsigned int num_samples = settings.constant_samples_per_pixel;
+                int grid_size = (int) sqrt(num_samples);
+                double subpixel_size_x = settings.pixel_size_x / grid_size;
+                double subpixel_size_y = settings.pixel_size_y / grid_size;
+                for (int i = 0; i < grid_size; i++) {
+                    for (int j = 0; j < grid_size; j++) {
+                        double cell_x_corner = x_corner + j * subpixel_size_x;
+                        double cell_y_corner = y_corner + i * subpixel_size_y;
+                        color += SampleCamera(cell_x_corner, cell_y_corner, subpixel_size_x, subpixel_size_y, debug_camera, true);
+                    }
+                }
+                color /= num_samples;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+    default:
+        break;
     }
 
     color = glm::clamp(color, 0.0f, 1.0f);
@@ -186,16 +244,21 @@ void RayTracer::ComputePixel(int i, int j, Camera* debug_camera) {
 }
 
 
-glm::vec3 RayTracer::SampleCamera(double x_corner, double y_corner, double pixel_size_x, double pixel_size_y, Camera* debug_camera)
+glm::vec3 RayTracer::SampleCamera(double x_corner, double y_corner, double pixel_size_x, double pixel_size_y, Camera* debug_camera, bool random)
 {
-    double x = x_corner + pixel_size_x * 0.5;
-    double y = y_corner + pixel_size_y * 0.5;
+    double x = x_corner + pixel_size_x * (random ? ((double) rand() / RAND_MAX) : 0.5);
+    double y = y_corner + pixel_size_y * (random ? ((double) rand() / RAND_MAX) : 0.5);
 
     glm::dvec3 point_on_focus_plane = settings.projection_origin + settings.projection_forward + (2.0*x-1.0)*settings.projection_right + (2.0*y-1.0)*settings.projection_up;
 
-    glm::vec2 sample = glm::dvec2(0,0);
-    double angle = sample.x;
-    double radius = sqrt(sample.y);
+    double angle = 0.0;
+    double radius = sqrt(0.0);
+
+    if (settings.random_mode != Camera::TRACERANDOM_DETERMINISTIC) {
+        // Monte Carlo: depth of field, sample eye position
+        angle = 2 * M_PI * ((double) rand() / RAND_MAX);
+        radius = sqrt((double) rand() / RAND_MAX);
+    }
 
     glm::dvec3 origin = settings.projection_origin + radius * (sin(angle) * settings.aperture_up + cos(angle) * settings.aperture_right);
 
@@ -222,19 +285,8 @@ glm::vec3 RayTracer::TraceRay(const Ray& r, int depth, RayType ray_type, Camera*
         debug_camera->AddDebugRay(r.position, endpoint, ray_type);
     }
 
-    if (trace_scene.Intersect(r, i)) {     
-        // REQUIREMENT: Implement Raytracing
-        // You must implement (see project page for details)
-        // 1. Blinn-Phong specular model
-        // 2. Light contribution
-        // 3. Shadow attenuation
-        // 4. Reflection
-        // 5. Refraction
-        // 6. Anti-Aliasing
-
-        // An intersection occured!  We've got work to do. For now,
-        // this code gets the material parameters for the surface
-        // that was intersected.
+    if (trace_scene.Intersect(r, i)) {
+        // An intersection occured!
         Material* mat = i.GetMaterial();
         glm::vec3 kd = mat->Diffuse->GetColorUV(i.uv);
         glm::vec3 ks = mat->Specular->GetColorUV(i.uv);
@@ -245,35 +297,315 @@ glm::vec3 RayTracer::TraceRay(const Ray& r, int depth, RayType ray_type, Camera*
 
         // Interpolated normal
         // Use this to when calculating geometry (entering object test, reflection, refraction, etc) or getting smooth shading (light direction test, etc)
-        glm::vec3 N = i.normal;
+        glm::dvec3 N = i.normal;
+        glm::dvec3 Q = r.at(i.t);
+        glm::dvec3 V = glm::normalize(-r.direction);
+        // inside an object if normal pointing away from ray
+        bool insideObject = glm::dot(-V, N) > 0.0;
+        if (insideObject) {
+            N = -N;
+        }
 
+        glm::vec3 color = ke;
 
-        return kd;
+        // Iterate over all light sources in the scene
+        for (auto j = trace_scene.lights.begin(); j != trace_scene.lights.end(); j++) {
+            TraceLight* trace_light = *j;
+            Light* scene_light = trace_light->light;
+            glm::dvec3 L;
+            glm::dvec3 H;
+            float a_dist = 1.0f;
+            glm::vec3 a_shadow(1.0);
 
-        // This is a great place to insert code for recursive ray tracing.
-        // Compute the blinn-phong shading, and don't stop there:
-        // add in contributions from reflected and refracted rays.
+            // distance attenuation for attenuating lights
+            if (auto attenuating_light = dynamic_cast<AttenuatingLight*>(scene_light)) {
+                double distance = glm::length(glm::dvec3(trace_light->GetTransformPos()) - Q);
+                a_dist = DistanceAttenuation(attenuating_light, distance);
+            }
 
-        // To iterate over all light sources in the scene, use code like this:
-        // for (auto j = trace_scene.lights.begin(); j != trace_scene.lights.end(); j++) {
-        //   TraceLight* trace_light = *j;
-        //   Light* scene_light = trace_light->light;
-        // }
+            if (auto point_light = dynamic_cast<PointLight*>(scene_light)) {
+                // point light
+                glm::dvec3 light_position = trace_light->GetTransformPos();
+                L = glm::normalize(light_position - Q);
 
-        // Make sure to test if the Reflections and Refractions checkboxes are enabled in the Render Cam UI
-        // Use this condition, only calculate reflection/refraction if enabled:
-        // if (settings.reflections) { ... }
-        // if (settings.refraction) { ... }
+                if (settings.shadows && glm::dot(N, L) >= NORMAL_EPSILON) {
+                    // only shoot shadow rays if not nullified by B = 0
+                    Ray shadow_ray(Q, L);
+                    a_shadow = ShadowAttenuation(shadow_ray, 0, light_position, debug_camera);
+                }
+            } else if (auto directional_light = dynamic_cast<DirectionalLight*>(scene_light)) {
+                // directional light
+                glm::vec3 light_direction = trace_light->GetTransformDirection();
+                // light_direction is actually reversed
+                L = glm::normalize(light_direction);
 
+                if (settings.shadows && glm::dot(N, L) >= NORMAL_EPSILON) {
+                    // only shoot shadow rays if not nullified by B = 0
+                    Ray shadow_ray(Q, L);
+                    a_shadow = ShadowAttenuation(shadow_ray, 0, shadow_ray.at(1000), debug_camera);
+                }
+            } else if (auto area_light = dynamic_cast<AreaLight*>(scene_light)) {
+                // area light
+                // follow Marschner-Shirley, randomly choose point in area: r = c + xi1 * a + xi2 * b
+                glm::dvec3 point_light_position = trace_light->GetTransformPos();
+                if (settings.random_mode != Camera::TRACERANDOM_DETERMINISTIC) {
+                    // Monte Carlo: sample point light position from area
+                    glm::vec3 c = ((trace_light->transform) * glm::vec4(-0.5, 0, -0.5, 1)).xyz;
+                    glm::vec3 c1 = ((trace_light->transform) * glm::vec4(-0.5, 0, 0.5, 1)).xyz;
+                    glm::vec3 c2 = ((trace_light->transform) * glm::vec4(0.5, 0, -0.5, 1)).xyz;
+                    glm::vec3 a = c1 - c;
+                    glm::vec3 b = c2 - c;
+                    double xi1 = (double) rand() / RAND_MAX;
+                    double xi2 = (double) rand() / RAND_MAX;
+                    point_light_position = glm::dvec3(c) + xi1 * glm::dvec3(a) + xi2 * glm::dvec3(b);
+                    // re-calculate distance attenuation
+                    double distance = glm::length(point_light_position - Q);
+                    a_dist = DistanceAttenuation(area_light, distance);
+                }
+                L = glm::normalize(point_light_position - Q);
+                if (settings.shadows && glm::dot(N, L) > 0) {
+                    Ray shadow_ray(Q, L);
+                    a_shadow = ShadowAttenuation(shadow_ray, 0, point_light_position, debug_camera);
+                }
+            }
+
+            H = glm::normalize(V + L);
+
+            float B = glm::dot(N, L) < NORMAL_EPSILON ? 0.0f : 1.0f;
+            float diffuseShade = glm::max(glm::dot(N, L), 0.0);
+            float _shininess = shininess > 0 ? shininess : NORMAL_EPSILON;
+            float specularShade = B * glm::pow(glm::max(glm::dot(H, N), 0.0), _shininess);
+
+            glm::vec3 ambient = kd * scene_light->Ambient.GetRGB();
+            // if (insideObject) {
+            //     ambient *= kt;
+            // }
+            glm::vec3 diffuse = a_dist * a_shadow * diffuseShade * kd * scene_light->GetIntensity();
+            glm::vec3 specular = a_dist * a_shadow * specularShade * ks * scene_light->GetIntensity();
+            color += ambient + diffuse + specular;
+        }
+
+        // Test if the Reflections and Refractions checkboxes are enabled in the Render Cam UI.
+        // Only calculate reflection/refraction if enabled.
+        if (depth < (int) settings.max_depth) {
+            if (settings.reflections && glm::length2(ks) >= RAY_EPSILON) {
+                glm::dvec3 R = glm::normalize(2.0 * glm::dot(V, N) * N - V);
+                if (settings.random_mode != Camera::TRACERANDOM_DETERMINISTIC) {
+                    // Monte Carlo: glossy reflection
+                    // calculate orthonormal basis
+                    int smallest_comp_index = 0;
+                    int smallest_comp_value = R.x;
+                    if (R.y < smallest_comp_value) {
+                        smallest_comp_index = 1;
+                        smallest_comp_value = R.y;
+                    }
+                    if (R.z < smallest_comp_value) {
+                        smallest_comp_index = 2;
+                        smallest_comp_value = R.z;
+                    }
+                    glm::dvec3 T(R);
+                    switch (smallest_comp_index)
+                    {
+                    case 0:
+                        T.x = 1;
+                        break;
+                    case 1:
+                        T.y = 1;
+                        break;
+                    case 2:
+                        T.z = 1;
+                    default:
+                        break;
+                    }
+                    glm::dvec3 U = glm::normalize(glm::cross(R, T));
+                    glm::dvec3 V = glm::normalize(glm::cross(R, U));
+                    // TODO: use something else for a
+                    double a = 1.0;
+                    double xi1 = (double) rand() / RAND_MAX;
+                    double xi2 = (double) rand() / RAND_MAX;
+                    double u = - a / 2 + xi1 * a;
+                    double v = - a / 2 + xi2 * a;
+                    glm::dvec3 R_diffuse = glm::normalize(R + u * U + v * V);
+                    Ray reflection_ray(Q, R_diffuse);
+                    color += ks * TraceRay(reflection_ray, depth + 1, RayType::reflection, debug_camera);
+                } else {
+                    Ray reflection_ray(Q, R);
+                    color += ks * TraceRay(reflection_ray, depth + 1, RayType::reflection, debug_camera);
+                }
+            }
+            if (settings.diffuse_reflection && settings.random_mode != Camera::TRACERANDOM_DETERMINISTIC) {
+                // Monte Carlo: diffuse reflection (?)
+                double u = -1 + 2 * ((double) rand() / RAND_MAX); // u: [-1, 1]
+                double theta = 2 * M_PI * ((double) rand() / RAND_MAX); // theta: [0, 2pi]
+                glm::dvec3 e(glm::sqrt(1- u * u) * glm::cos(theta), glm::sqrt(1- u * u) * glm::sin(theta), u);
+                glm::dvec3 R;
+                if (glm::length(N + e) < NORMAL_EPSILON) {
+                    R = N;
+                } else {
+                    R = glm::normalize(N + e);
+                }
+                double cos_theta = glm::dot(R, N);
+                glm::vec3 brdf = glm::dvec3(ks) / M_PI;
+                const double p = 1/(2*M_PI);
+                Ray diffuse_reflection_ray(Q, R);
+                color += brdf * TraceRay(diffuse_reflection_ray, depth + 1, RayType::diffuse_reflection, debug_camera) * (float) (cos_theta / p);
+            }
+            if (settings.refractions && glm::length2(kt) >= RAY_EPSILON) {
+                double eta_i, eta_t;
+                if (insideObject) {
+                    eta_i = index_of_refraction;
+                    eta_t = INDEX_OF_AIR;
+                } else {
+                    eta_i = INDEX_OF_AIR;
+                    eta_t = index_of_refraction;
+                }
+                double eta = eta_i / eta_t;
+                double cos_theta_i = glm::dot(N, V);
+                double cos_theta_t_sq = 1 - eta * eta * (1 - cos_theta_i * cos_theta_i);
+                if (cos_theta_t_sq >= NORMAL_EPSILON) {
+                    // not total internal reflection
+                    double cos_theta_t = glm::sqrt(cos_theta_t_sq);
+                    glm::dvec3 T = glm::normalize((eta * cos_theta_i - cos_theta_t) * N - eta * V);
+                    // refracted way entering surface, continue
+                    Ray refraction_ray(Q, T);
+                    color += kt * TraceRay(refraction_ray, depth + 1, RayType::refraction, debug_camera);
+                }
+            }
+        }
+        return color;
     } else {
         // No intersection. This ray travels to infinity, so we color it according to the background color,
         // which in this (simple) case is just black.
-        // EXTRA CREDIT: Use environment mapping to determine the color instead
         glm::vec3 background_color = glm::vec3(0, 0, 0);
-        return background_color;
+        if (!settings.skybox) {
+            return background_color;
+        }
+        // EXTRA CREDIT: Use environment mapping to determine the color instead
+        // faces: "ft","bk","up","dn","rt","lf"
+        int max_component_index = 0;
+        double max_component_abs = glm::abs(r.direction.x);
+        if (glm::abs(r.direction.y) > max_component_abs) {
+            max_component_index = 1;
+            max_component_abs = glm::abs(r.direction.y);
+        }
+        if (glm::abs(r.direction.z) > max_component_abs) {
+            max_component_index = 2;
+            max_component_abs = glm::abs(r.direction.z);
+        }
+        unsigned int resolution = settings.skybox->GetResolution();
+        int face;
+        float face_x, face_y;
+        switch (max_component_index)
+        {
+        case 0:
+            if (r.direction.x >= 0) {
+                // right
+                face = 4;
+                face_x = ((r.direction.z / max_component_abs) + 1.0) / 2.0 * resolution;
+                face_y = (-(r.direction.y / max_component_abs) + 1.0) / 2.0 * resolution;
+            } else {
+                // left
+                face = 5;
+                face_x = (-(r.direction.z / max_component_abs) + 1.0) / 2.0 * resolution;
+                face_y = (-(r.direction.y / max_component_abs) + 1.0) / 2.0 * resolution;
+            }
+            break;
+        case 1:
+            if (r.direction.y >= 0) {
+                // top
+                face = 2;
+                face_x = ((r.direction.x / max_component_abs) + 1.0) / 2.0 * resolution;
+                face_y = (-(r.direction.z / max_component_abs) + 1.0) / 2.0 * resolution;
+            } else {
+                // bottom
+                face = 3;
+                face_x = ((r.direction.x / max_component_abs) + 1.0) / 2.0 * resolution;
+                face_y = ((r.direction.z / max_component_abs) + 1.0) / 2.0 * resolution;
+            }
+            break;
+        case 2:
+            if (r.direction.z >= 0) {
+                // front
+                face = 0;
+                face_x = (-(r.direction.x / max_component_abs) + 1.0) / 2.0 * resolution;
+                face_y = (-(r.direction.y / max_component_abs) + 1.0) / 2.0 * resolution;
+            } else {
+                // back
+                face = 1;
+                face_x = ((r.direction.x / max_component_abs) + 1.0) / 2.0 * resolution;
+                face_y = (-(r.direction.y / max_component_abs) + 1.0) / 2.0 * resolution;
+            }
+        default:
+            break;
+        }
+        // bilinear interpolation
+        const unsigned char *image = settings.skybox->GetFace(face);
+        int x1 = (int) floor(face_x);
+        int x2 = (int) ceil(face_x);
+        int y1 = (int) floor(face_y);
+        int y2 = (int) ceil(face_y);
+        x2 = x2 >= resolution ? resolution - 1 : x2;
+        y2 = y2 >= resolution ? resolution - 1 : y2;
+        const unsigned int CHANNELS = 4; // RGBA
+        int tl_index = y2 * resolution * CHANNELS + x1 * CHANNELS;
+        int tr_index = y2 * resolution * CHANNELS + x2 * CHANNELS;
+        int bl_index = y1 * resolution * CHANNELS + x1 * CHANNELS;
+        int br_index = y1 * resolution * CHANNELS + x2 * CHANNELS;
+        glm::vec4 tl(image[tl_index], image[tl_index+1], image[tl_index+2], image[tl_index+3]);
+        glm::vec4 tr(image[tr_index], image[tr_index+1], image[tr_index+2], image[tr_index+3]);
+        glm::vec4 bl(image[bl_index], image[bl_index+1], image[bl_index+2], image[bl_index+3]);
+        glm::vec4 br(image[br_index], image[br_index+1], image[br_index+2], image[br_index+3]);
+        glm::vec4 tm = (face_x - x1) * tr + (x2 - face_x) * tl;
+        glm::vec4 bm = (face_x - x1) * br + (x2 - face_x) * bl;
+        glm::vec4 color = (face_y - y1) * tm + (y2 - face_y) * bm;
+        glm::vec4 normalized_color = glm::clamp(color / 255.0f, 0.0f, 1.0f);
+        return normalized_color.xyz;
     }
 }
 
+double RayTracer::DistanceAttenuation(AttenuatingLight* attenuating_light, double distance)
+{
+    double a = attenuating_light->AttenA.Get();
+    double b = attenuating_light->AttenB.Get();
+    double c = attenuating_light->AttenC.Get();
+    double a_dist_r = a * distance * distance + b * distance + c;
+    double a_dist = (a_dist_r != 0) ? (1.0 / a_dist_r) : 1.0;
+    return glm::min(1.0, a_dist);
+}
+
+glm::vec3 RayTracer::ShadowAttenuation(const Ray& shadow_ray, int depth, glm::vec3 light_position, Camera* debug_camera)
+{
+    Intersection i;
+    if (debug_camera) {
+        glm::dvec3 endpoint = light_position;
+        if (trace_scene.Intersect(shadow_ray, i)) {
+            endpoint = shadow_ray.at(i.t);
+        }
+        debug_camera->AddDebugRay(shadow_ray.position, endpoint, RayType::shadow);
+    }
+
+    if (trace_scene.Intersect(shadow_ray, i)) {
+        if (glm::length(shadow_ray.direction * i.t) > glm::distance(glm::dvec3(light_position), shadow_ray.position)) {
+            // already past the light, this intersection doesn't block light
+            return glm::vec3(1.0);
+        }
+        if (!settings.translucent_shadows) {
+            return glm::vec3(0.0);
+        }
+        Material* mat = i.GetMaterial();
+        glm::vec3 kt = mat->Transmittence->GetColorUV(i.uv);
+        if (glm::length2(kt) < RAY_EPSILON) {
+            return kt;
+        }
+        glm::dvec3 Q = shadow_ray.at(i.t);
+        Ray next_shadow_ray(Q, shadow_ray.direction);
+        kt *= ShadowAttenuation(next_shadow_ray, depth + 1, light_position, debug_camera);
+        return kt;
+    } else {
+        // nothing is in the way
+        return glm::vec3(1.0);
+    }
+}
 
 // Multi-Threading
 RTWorker::RTWorker(RayTracer &tracer_) :

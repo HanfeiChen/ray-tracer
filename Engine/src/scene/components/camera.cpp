@@ -22,6 +22,7 @@ Camera::Camera(double fov, int render_width, int render_height, double near_plan
     IsPerspective(true),
     FOV(fov),
     Width(width < 0 ? 5.0 : width),
+    Skybox(AssetType::Cubemap),
     TraceSettings(),
 
     TraceRandomMode({"Off", "Uniform Random", "Stratified Random"}, 0),
@@ -54,6 +55,8 @@ Camera::Camera(double fov, int render_width, int render_height, double near_plan
     AddProperty("Perspective Camera?", &IsPerspective);
     AddProperty("FOV", &FOV);
     AddProperty("Orthographic View Width", &Width);
+
+    AddProperty("Skybox", &Skybox);
 
     AddProperty("Trace", &TraceSettings);
         TraceSettings.AddProperty("Monte Carlo", &TraceRandomMode);

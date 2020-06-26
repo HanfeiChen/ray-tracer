@@ -51,7 +51,7 @@ bool TraceGeometry::Intersect(const Ray &r, Intersection &i)
     // Transform the ray into the object's local coordinate space
     glm::dvec3 pos = glm::dvec3(inverse_transform * glm::dvec4(r.position, 1));
     glm::dvec3 dir = glm::dvec3(inverse_transform * glm::dvec4((r.position + r.direction), 1)) - pos;
-    double length = dir.length();
+    double length = glm::length(dir);
     dir /= length;
 
     Ray localRay( pos, dir );

@@ -69,8 +69,10 @@ class RayTracer {
         glm::dvec3 aperture_up;
         glm::dvec3 aperture_right;
         float aperture_radius;
+
+        Cubemap *skybox;
     };
-    
+
     RayTracer(Scene& scene, SceneObject& camera);
     ~RayTracer();
 
@@ -109,7 +111,9 @@ private:
     // Recursively traces ray through the scene. Depth is used to end recursion.
     // Thresh is used to terminate ray tracing early if the ray contribution is too little.
     glm::vec3 TraceRay(const Ray& r, int depth, RayType ray_type, Camera* debug_camera=nullptr);
-    glm::vec3 SampleCamera(double x_corner, double y_corner, double pixel_size_x, double pixel_size_y, Camera* debug_camera=nullptr);
+    glm::vec3 ShadowAttenuation(const Ray& shadow_ray, int depth, glm::vec3 light_position, Camera* debug_camera=nullptr);
+    double DistanceAttenuation(AttenuatingLight* attenuating_light, double distance);
+    glm::vec3 SampleCamera(double x_corner, double y_corner, double pixel_size_x, double pixel_size_y, Camera* debug_camera=nullptr, bool random=false);
 };
 
 // Worker thread for raytracing
